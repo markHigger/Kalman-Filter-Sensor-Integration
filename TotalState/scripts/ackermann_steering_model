@@ -1,0 +1,133 @@
+#!/usr/bin/env python
+from __future__ import division
+import roslib
+#roslib.load_manifest('rosopencv')
+import sys
+import rospy
+import math
+import time
+import tf
+from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Imu
+from nav_msgs.msg import Odometry
+
+WHEEL_RL = 2
+WHEEL_RR = 3
+STEER_FL = 4
+STEER_FR = 5
+#WHEEL_DIAMETER = 0.67818 # meters
+WHEEL_RADIUS = 0.33909 # meters
+T = 1.574 #Length of rear car axle in meters
+L = 2.850 #Length between 2 car axles in meters
+START_HEADING=-43.348 #degrees
+currentHeading = START_HEADING
+SAMPLE_PD=0.0067
+x_pos=0
+y_pos=0
+
+jointStates = JointState()
+newJointData = False
+imuData = Imu()
+gotIMUData = False
+
+########################################################
+#Callback functions for each subscriber
+########################################################
+def updateJointStates(data):
+    global jointStates, newJointData
+    jointStates = data
+    newJointData = True
+
+def updateIMUData(data):
+    global imuData, gotIMUData
+    imuData = data
+    gotIMUData = True
+
+def main():
+    global x_pos, y_pos, SAMPLE_PD, currentHeading, jointStates, newJointData, imuData, gotIMUData, WHEEL_RL, WHEEL_RR, STEER_FL, STEER_FR, WHEEL_RADIUS, T, L
+
+    rospy.init_node('ackermann_steering_node', anonymous=True)
+
+    rospy.loginfo("Ackermann Node Initialized")
+
+    rospy.Subscriber("/vehicle/joint_states", JointState, updateJointStates, queue_size=10)
+    rospy.Subscriber("/imu/imu", Imu, updateIMUData, queue_size=10)
+    pub = rospy.Publisher('/eece5554/ackermann_steering', Odometry, queue_size=10)
+
+    time.sleep(1)
+
+    while gotIMUData is False:
+        rospy.loginfo("No IMU Data")
+        time.sleep(0.5)
+
+    while not rospy.is_shutdown():
+        while newJointData is False:
+            time.sleep(0.001)
+
+        newJointData = False
+        odomData = Odometry()
+        odomData.header=jointStates.header #TODO: Re-add header info
+        odomData.header.frame_id = 'base_link'
+        odomData.child_frame_id='base_link' #TODO: If was base_link y velo would always be 0 right?
+
+        theta_L = jointStates.position[STEER_FL]
+        theta_R = jointStates.position[STEER_FR]
+        linear_vel_RL = jointStates.velocity[WHEEL_RL]*WHEEL_RADIUS;
+        linear_vel_RR = jointStates.velocity[WHEEL_RR]*WHEEL_RADIUS;
+        linear_vel_car = (linear_vel_RL + linear_vel_RR)/2;
+
+        odomData.twist.twist.linear.x=linear_vel_car
+
+        #TODO: Assuming imu orientation lined up with odom frame??
+        #TODO: Does transformation need to be done from imu frame to odom frame?
+        #Calculate car orientation - TODO: NOT NEEDED???
+
+        #euler = tf.transformations.euler_from_quaternion(imuData.orientation)
+        #roll = euler[0]
+        #pitch = euler[1]
+        #yaw = euler[2]
+
+        if abs(theta_R) > 0.013: #Car is turning - Ackermann model needed
+            #odom.twist.twist.linear=linear_vel_car
+            #odom.twist.twist.linear.x = linear_vel_car*math.cos(yaw)
+            #odom.twist.twist.linear.y = linear_vel_car*math.sin(yaw)
+            if theta_R > 0: #Turn left
+                theta_i = theta_L
+                theta_o = theta_R
+                turningRight = False
+            else: #Turn right
+                theta_i = theta_R
+                theta_o = theta_L
+                turningRight = True
+
+            r_i = L/math.tan(theta_i)
+            r_o = L/math.tan(theta_o)
+            r = (r_i + r_o)/2
+            angular_vel=linear_vel_car / r
+            currentHeading=currentHeading+math.degrees(angular_vel*SAMPLE_PD)
+
+            odomData.twist.twist.angular.z = angular_vel
+
+        #Add covariance to twist
+        #odomData.twist.covariance=[1.0e-24,0,0,0,0,0,   0,1.0e-24,0,0,0,0,   0,0,1.0e-24,0,0,0,   0,0,0,1.0e-8,0,0,   0,0,0,0,1.0e-8,0,   0,0,0,0,0,1.0e-8]
+        odomData.twist.covariance=[1.0e-24,0,0,0,0,0,   0,1.0e-24,0,0,0,0,   0,0,1.0e-24,0,0,0,   0,0,0,1.0e-24,0,0,   0,0,0,0,1.0e-24,0,   0,0,0,0,0,1.0e-24]
+        #Calculate position based on ackermann model
+        dist_traveled=linear_vel_car*SAMPLE_PD
+        x_dist=dist_traveled*math.cos(math.radians(currentHeading))
+        y_dist=dist_traveled*math.sin(math.radians(currentHeading))
+
+        x_pos=x_pos+x_dist
+        y_pos=y_pos+y_dist
+        odomData.pose.pose.position.x=x_pos
+        odomData.pose.pose.position.y=y_pos
+
+        quaternion = tf.transformations.quaternion_from_euler(0, 0, currentHeading-90)
+        #type(pose) = geometry_msgs.msg.Pose
+        odomData.pose.pose.orientation.x = quaternion[0]
+        odomData.pose.pose.orientation.y = quaternion[1]
+        odomData.pose.pose.orientation.z = quaternion[2]
+        odomData.pose.pose.orientation.w = quaternion[3]
+        pub.publish(odomData)
+
+if __name__ == '__main__':
+        main()

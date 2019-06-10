@@ -1,0 +1,17 @@
+<launch>
+  <node pkg="eece5554-autonomous-car" type="ackermann_steering_model" name="ack_model" >
+  </node>
+
+  <node pkg="eece5554-autonomous-car" type="odom_to_gps.py" name="odom_gps" >
+  </node>
+
+  <node pkg="robot_localization" type="ekf_localization_node" name="ekf_se" clear_params="true">
+    <rosparam command="load" file="$(find eece5554-autonomous-car)/params/ekf_ack.yaml" />
+
+   <!--  Placeholder for output topic remapping
+    <remap from="odometry/filtered" to=""/>
+    <remap from="accel/filtered" to=""/>
+    -->
+
+  </node>
+</launch>
